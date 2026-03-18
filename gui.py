@@ -1,6 +1,7 @@
 """
 CustomTkinter GUI for Razer Viper Mini Config.
-Tabs: Buttons | DPI | Macros | Lighting
+Pages: Buttons | DPI | Macros | Lighting
+Sidebar navigation replaces CTkTabview.
 """
 
 import threading
@@ -21,17 +22,25 @@ ctk.set_default_color_theme("blue")
 
 import time as _time
 
-BG       = "#030311"
-CARD     = "#101028"
+BG       = "#111114"
+SIDEBAR  = "#0d0d10"
+SURFACE  = "#1c1c24"
+BORDER   = "#252530"
 ACCENT   = "#818cf8"
-ACCENT2  = "#38bdf8"
-TEXT     = "#e2e8f0"
-MUTED    = "#94a3b8"
-BTN_FG   = "#251e52"
-BTN_HOV  = "#352a72"
+ACCENT_H = "#6366f1"
+TEXT     = "#efefef"
+MUTED    = "#60607a"
+DIM      = "#38384a"
 SUCCESS  = "#4ade80"
 WARNING  = "#fbbf24"
 ERROR    = "#f87171"
+BTN      = "#232330"
+BTN_HOV  = "#2d2d3c"
+DANGER   = "#321818"
+DANGER_H = "#4a2020"
+
+# Keep old names as aliases so internal widget code keeps working
+BTN_FG   = BTN
 
 
 # ── Reusable widgets ──────────────────────────────────────────────────────────
@@ -43,7 +52,7 @@ def _label(parent, text, size=13, bold=False, color=TEXT, **kw):
                         text_color=color, **kw)
 
 
-def _btn(parent, text, command, width=120, fg=BTN_FG, hover=BTN_HOV, **kw):
+def _btn(parent, text, command, width=120, fg=BTN, hover=BTN_HOV, **kw):
     _last = [0.0]
     def _fire(e=None):
         t = _time.monotonic()
@@ -52,7 +61,7 @@ def _btn(parent, text, command, width=120, fg=BTN_FG, hover=BTN_HOV, **kw):
             command()
     b = ctk.CTkButton(parent, text=text, command=_fire, width=width,
                       fg_color=fg, hover_color=hover,
-                      corner_radius=8, font=ctk.CTkFont(size=13), **kw)
+                      corner_radius=6, font=ctk.CTkFont(size=13), **kw)
     b._viper_fire = _fire
     b.bind("<ButtonRelease-1>", _fire, add="+")
     b.bind("<B1-Motion>", _fire, add="+")
@@ -60,9 +69,9 @@ def _btn(parent, text, command, width=120, fg=BTN_FG, hover=BTN_HOV, **kw):
 
 
 def _section(parent, title):
-    """Return a labelled card frame."""
-    frame = ctk.CTkFrame(parent, fg_color=CARD, corner_radius=10)
-    _label(frame, title, size=12, bold=True, color=MUTED).pack(
+    """Return a labelled section frame."""
+    frame = ctk.CTkFrame(parent, fg_color=SURFACE, corner_radius=8)
+    _label(frame, title, size=10, bold=True, color=MUTED).pack(
         anchor="w", padx=14, pady=(10, 4))
     return frame
 
@@ -119,8 +128,8 @@ class ShortcutEntry(ctk.CTkFrame):
 
         self._rec_btn = ctk.CTkButton(
             self, text="Record", width=72,
-            fg_color=BTN_FG, hover_color=BTN_HOV,
-            corner_radius=8, font=ctk.CTkFont(size=12),
+            fg_color=BTN, hover_color=BTN_HOV,
+            corner_radius=6, font=ctk.CTkFont(size=12),
             command=self._start)
         self._rec_btn.pack(side="left")
 
@@ -157,7 +166,7 @@ class ShortcutEntry(ctk.CTkFrame):
                 pass
         self._bind_ids.clear()
         self._rec_btn.configure(text="Record",
-                                 fg_color=BTN_FG, hover_color=BTN_HOV)
+                                 fg_color=BTN, hover_color=BTN_HOV)
 
     def _on_release(self, event):
         sym = event.keysym
@@ -243,22 +252,22 @@ class ButtonsTab(ctk.CTkFrame):
 
     def _build(self):
         _label(self, "Button Remapping", size=15, bold=True).pack(
-            anchor="w", padx=4, pady=(8, 2))
+            anchor="w", padx=16, pady=(12, 2))
         _label(self, "Side buttons are intercepted in software (requires Accessibility).",
-               color=MUTED, size=12).pack(anchor="w", padx=4, pady=(0, 10))
+               color=MUTED, size=12).pack(anchor="w", padx=16, pady=(0, 10))
 
         card = _section(self, "CONFIGURABLE BUTTONS")
-        card.pack(fill="x", padx=4, pady=4)
+        card.pack(fill="x", padx=16, pady=4)
 
         for btn_num in (BTN_BACK, BTN_FORWARD, BTN_MIDDLE):
             self._add_row(card, btn_num)
 
         _label(self, "Left and Right click cannot be remapped via software.",
-               color=MUTED, size=11).pack(anchor="w", padx=4, pady=(8, 0))
+               color=MUTED, size=11).pack(anchor="w", padx=16, pady=(10, 0))
 
     def _add_row(self, parent, btn_num: int):
         row = ctk.CTkFrame(parent, fg_color="transparent")
-        row.pack(fill="x", padx=10, pady=5)
+        row.pack(fill="x", padx=12, pady=7)
 
         _label(row, BUTTON_NAMES[btn_num], size=13, width=160).pack(
             side="left", padx=(0, 10))
@@ -356,21 +365,21 @@ class DPITab(ctk.CTkFrame):
 
     def _build(self):
         _label(self, "DPI Stages", size=15, bold=True).pack(
-            anchor="w", padx=4, pady=(8, 2))
+            anchor="w", padx=16, pady=(12, 2))
         _label(self, "Set up to 5 DPI stages. Cycle through them with the DPI button.",
-               color=MUTED, size=12).pack(anchor="w", padx=4, pady=(0, 10))
+               color=MUTED, size=12).pack(anchor="w", padx=16, pady=(0, 10))
 
         card = _section(self, "STAGES")
-        card.pack(fill="x", padx=4, pady=4)
+        card.pack(fill="x", padx=16, pady=4)
 
         for i in range(5):
             self._add_stage_row(card, i)
 
         # Active stage
         active_card = _section(self, "ACTIVE STAGE ON STARTUP")
-        active_card.pack(fill="x", padx=4, pady=(8, 4))
+        active_card.pack(fill="x", padx=16, pady=(10, 4))
         row = ctk.CTkFrame(active_card, fg_color="transparent")
-        row.pack(fill="x", padx=10, pady=(4, 10))
+        row.pack(fill="x", padx=12, pady=(6, 12))
         for i in range(5):
             ctk.CTkRadioButton(
                 row, text=f"Stage {i+1}", variable=self._active_var, value=i,
@@ -380,15 +389,15 @@ class DPITab(ctk.CTkFrame):
 
         # Apply button
         btn_row = ctk.CTkFrame(self, fg_color="transparent")
-        btn_row.pack(fill="x", padx=4, pady=(12, 4))
+        btn_row.pack(fill="x", padx=16, pady=(14, 4))
         _btn(btn_row, "Apply to Device", self._apply,
-             width=160, fg=ACCENT, hover="#6366f1").pack(side="left", padx=4)
+             width=160, fg=ACCENT, hover=ACCENT_H).pack(side="left", padx=4)
         self._status = _label(btn_row, "", color=MUTED, size=12)
         self._status.pack(side="left", padx=8)
 
     def _add_stage_row(self, parent, idx: int):
         row = ctk.CTkFrame(parent, fg_color="transparent")
-        row.pack(fill="x", padx=10, pady=6)
+        row.pack(fill="x", padx=12, pady=7)
 
         enabled_var = ctk.BooleanVar(value=self.config.dpi_enabled[idx])
         chk = ctk.CTkCheckBox(row, text=f"Stage {idx+1}", variable=enabled_var,
@@ -473,14 +482,14 @@ class MacrosTab(ctk.CTkFrame):
 
     def _build(self):
         pane = ctk.CTkFrame(self, fg_color="transparent")
-        pane.pack(fill="both", expand=True, padx=4, pady=4)
+        pane.pack(fill="both", expand=True, padx=16, pady=12)
 
         # ── Left: macro list ──────────────────────────────────────────────────
-        left = ctk.CTkFrame(pane, fg_color=CARD, corner_radius=10, width=180)
-        left.pack(side="left", fill="y", padx=(0, 8), pady=0)
+        left = ctk.CTkFrame(pane, fg_color=SURFACE, corner_radius=8, width=180)
+        left.pack(side="left", fill="y", padx=(0, 10), pady=0)
         left.pack_propagate(False)
 
-        _label(left, "MACROS", size=12, bold=True, color=MUTED).pack(
+        _label(left, "MACROS", size=10, bold=True, color=MUTED).pack(
             anchor="w", padx=12, pady=(10, 4))
 
         self._list_frame = ctk.CTkScrollableFrame(
@@ -490,15 +499,15 @@ class MacrosTab(ctk.CTkFrame):
         btn_row = ctk.CTkFrame(left, fg_color="transparent")
         btn_row.pack(fill="x", padx=8, pady=8)
         _btn(btn_row, "+ New", self._new_macro, width=72, fg=ACCENT,
-             hover="#6366f1").pack(side="left")
-        _btn(btn_row, "Delete", self._delete_macro, width=72, fg="#3b1e1e",
-             hover="#5c2626").pack(side="right")
+             hover=ACCENT_H).pack(side="left")
+        _btn(btn_row, "Delete", self._delete_macro, width=72, fg=DANGER,
+             hover=DANGER_H).pack(side="right")
 
         # ── Right: editor ─────────────────────────────────────────────────────
-        right = ctk.CTkFrame(pane, fg_color=CARD, corner_radius=10)
+        right = ctk.CTkFrame(pane, fg_color=SURFACE, corner_radius=8)
         right.pack(side="left", fill="both", expand=True)
 
-        _label(right, "EDITOR", size=12, bold=True, color=MUTED).pack(
+        _label(right, "EDITOR", size=10, bold=True, color=MUTED).pack(
             anchor="w", padx=14, pady=(10, 4))
 
         name_row = ctk.CTkFrame(right, fg_color="transparent")
@@ -527,7 +536,7 @@ class MacrosTab(ctk.CTkFrame):
                       placeholder_text="value", width=140).pack(
             side="left", padx=(0, 6))
         _btn(add_row, "+ Add", self._add_step, width=80,
-             fg=BTN_FG, hover=BTN_HOV).pack(side="left")
+             fg=BTN, hover=BTN_HOV).pack(side="left")
 
         self._editor_placeholder = _label(
             right, "Select or create a macro", color=MUTED, size=13)
@@ -598,11 +607,11 @@ class MacrosTab(ctk.CTkFrame):
         elif t == "mouse_click": display = f"Click: {step.get('button','left')}"
         else:                   display = str(step)
 
-        row = ctk.CTkFrame(self._steps_frame, fg_color="#1a1a38", corner_radius=6)
+        row = ctk.CTkFrame(self._steps_frame, fg_color=DIM, corner_radius=6)
         row.pack(fill="x", pady=2)
-        _label(row, f"{idx+1}. {display}", size=12).pack(side="left", padx=10, pady=4)
-        _btn(row, "✕", lambda i=idx: self._remove_step(i),
-             width=28, height=24, fg="#3b1e1e", hover="#5c2626").pack(
+        _label(row, f"{idx+1}. {display}", size=12).pack(side="left", padx=10, pady=5)
+        _btn(row, "x", lambda i=idx: self._remove_step(i),
+             width=28, height=24, fg=DANGER, hover=DANGER_H).pack(
             side="right", padx=4)
 
     def _add_step(self):
@@ -668,15 +677,15 @@ class LightingTab(ctk.CTkFrame):
         lcfg = self.config.data["lighting"]
 
         _label(self, "Lighting", size=15, bold=True).pack(
-            anchor="w", padx=4, pady=(8, 2))
+            anchor="w", padx=16, pady=(12, 2))
         _label(self, "Controls the Razer logo LED on the Viper Mini.",
-               color=MUTED, size=12).pack(anchor="w", padx=4, pady=(0, 10))
+               color=MUTED, size=12).pack(anchor="w", padx=16, pady=(0, 10))
 
         card = _section(self, "EFFECT")
-        card.pack(fill="x", padx=4, pady=4)
+        card.pack(fill="x", padx=16, pady=4)
 
         effect_row = ctk.CTkFrame(card, fg_color="transparent")
-        effect_row.pack(fill="x", padx=10, pady=(4, 8))
+        effect_row.pack(fill="x", padx=12, pady=(6, 10))
         _label(effect_row, "Effect:", size=13, width=70).pack(side="left")
         self._effect_var = ctk.StringVar(value=lcfg["effect"].capitalize())
         ctk.CTkComboBox(effect_row, values=_EFFECTS,
@@ -685,22 +694,21 @@ class LightingTab(ctk.CTkFrame):
 
         # Colour
         color_card = _section(self, "COLOR")
-        color_card.pack(fill="x", padx=4, pady=4)
+        color_card.pack(fill="x", padx=16, pady=4)
 
         c1_row = ctk.CTkFrame(color_card, fg_color="transparent")
-        c1_row.pack(fill="x", padx=10, pady=(4, 4))
+        c1_row.pack(fill="x", padx=12, pady=(6, 8))
         _label(c1_row, "Color 1:", size=13, width=70).pack(side="left")
         self._color_btn = ColorButton(
             c1_row, lcfg["color"],
             on_change=lambda c: self._on_color(c, "color"))
         self._color_btn.pack(side="left", padx=6)
 
-
         # Speed
         speed_card = _section(self, "SPEED  (breathing / reactive)")
-        speed_card.pack(fill="x", padx=4, pady=4)
+        speed_card.pack(fill="x", padx=16, pady=4)
         speed_row = ctk.CTkFrame(speed_card, fg_color="transparent")
-        speed_row.pack(fill="x", padx=10, pady=(4, 10))
+        speed_row.pack(fill="x", padx=12, pady=(6, 12))
         _label(speed_row, "Fast", size=12, color=MUTED, width=36).pack(side="left")
         self._speed_var = ctk.IntVar(value=lcfg["speed"])
         ctk.CTkSlider(speed_row, from_=1, to=3, number_of_steps=2,
@@ -711,9 +719,9 @@ class LightingTab(ctk.CTkFrame):
 
         # Apply
         btn_row = ctk.CTkFrame(self, fg_color="transparent")
-        btn_row.pack(fill="x", padx=4, pady=(12, 4))
+        btn_row.pack(fill="x", padx=16, pady=(14, 4))
         _btn(btn_row, "Apply to Device", self._apply,
-             width=160, fg=ACCENT, hover="#6366f1").pack(side="left", padx=4)
+             width=160, fg=ACCENT, hover=ACCENT_H).pack(side="left", padx=4)
         self._status = _label(btn_row, "", color=MUTED, size=12)
         self._status.pack(side="left", padx=8)
 
@@ -752,7 +760,7 @@ class App(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.title("Viper Mini Config")
-        self.geometry("820x560")
+        self.geometry("860x560")
         self.resizable(False, False)
         self.configure(fg_color=BG)
 
@@ -770,75 +778,127 @@ class App(ctk.CTk):
     # ── Build ──────────────────────────────────────────────────────────────────
 
     def _build(self):
-        # Top bar
-        bar = ctk.CTkFrame(self, fg_color=CARD, corner_radius=0, height=52)
-        bar.pack(fill="x")
-        bar.pack_propagate(False)
+        # ── Header ────────────────────────────────────────────────────────────
+        header = ctk.CTkFrame(self, fg_color=SIDEBAR, corner_radius=0, height=48)
+        header.pack(fill="x")
+        header.pack_propagate(False)
 
-        _label(bar, "🖱  Razer Viper Mini Config", size=16, bold=True).pack(
-            side="left", padx=18, pady=12)
+        _label(header, "Viper Mini", size=15, bold=True).pack(
+            side="left", padx=18, pady=0)
 
-        self._conn_label = _label(bar, "⬤  Searching…", size=13, color=MUTED)
+        self._conn_label = _label(header, "Searching…", size=12, color=MUTED)
         self._conn_label.pack(side="right", padx=18)
 
-        # Accessibility warning (hidden until needed)
+        # ── Accessibility warning (hidden until needed) ────────────────────────
         self._acc_bar = ctk.CTkFrame(self, fg_color="#2a1a0a", corner_radius=0)
         _label(self._acc_bar,
-               "⚠  Accessibility access required for button remapping.  ",
+               "Accessibility access required for button remapping.  ",
                color=WARNING, size=12).pack(side="left", padx=14, pady=6)
         _btn(self._acc_bar, "Grant Access", self._grant_access,
              width=110, fg="#7c4a00", hover="#a36200").pack(side="left")
 
-        # Tab view
-        self._tabs = ctk.CTkTabview(
-            self, fg_color=BG, segmented_button_fg_color=CARD,
-            segmented_button_selected_color=BTN_FG,
-            segmented_button_selected_hover_color=BTN_HOV,
-            segmented_button_unselected_color=CARD,
-            segmented_button_unselected_hover_color="#1a1a38",
-            text_color=TEXT, text_color_disabled=MUTED)
-        self._tabs.pack(fill="both", expand=True, padx=10, pady=(4, 6))
+        # ── Body: sidebar + content ────────────────────────────────────────────
+        body = ctk.CTkFrame(self, fg_color="transparent")
+        body.pack(fill="both", expand=True)
 
-        for name in ("Buttons", "DPI", "Macros", "Lighting"):
-            self._tabs.add(name)
+        # Sidebar (130px)
+        sidebar = ctk.CTkFrame(body, fg_color=SIDEBAR, corner_radius=0, width=130)
+        sidebar.pack(side="left", fill="y")
+        sidebar.pack_propagate(False)
 
-        self._btns_tab = ButtonsTab(
-            self._tabs.tab("Buttons"), self.config, self)
+        # 1px separator line
+        sep = ctk.CTkFrame(body, fg_color=BORDER, corner_radius=0, width=1)
+        sep.pack(side="left", fill="y")
+
+        # Content area
+        self._content = ctk.CTkFrame(body, fg_color=BG, corner_radius=0)
+        self._content.pack(side="left", fill="both", expand=True)
+
+        # ── Nav buttons ───────────────────────────────────────────────────────
+        nav_top = ctk.CTkFrame(sidebar, fg_color="transparent")
+        nav_top.pack(fill="x", padx=8, pady=(12, 0))
+
+        self._nav_buttons: dict[str, ctk.CTkButton] = {}
+        for page_name in ("Buttons", "DPI", "Macros", "Lighting"):
+            btn = ctk.CTkButton(
+                nav_top, text=page_name, anchor="w",
+                height=36, corner_radius=6,
+                fg_color="transparent", hover_color=BTN_HOV,
+                text_color=MUTED,
+                font=ctk.CTkFont(size=13),
+                command=lambda n=page_name: self._show_page(n))
+            btn._viper_fire = lambda n=page_name: self._show_page(n)
+            btn.pack(fill="x", pady=2)
+            self._nav_buttons[page_name] = btn
+
+        # ── Sidebar footer ────────────────────────────────────────────────────
+        sidebar_footer = ctk.CTkFrame(sidebar, fg_color="transparent")
+        sidebar_footer.pack(side="bottom", fill="x", padx=8, pady=10)
+
+        reset_btn = _btn(sidebar_footer, "Factory Reset", self._factory_reset,
+                         width=114, fg=DANGER, hover=DANGER_H)
+        reset_btn.configure(font=ctk.CTkFont(size=11))
+        reset_btn.pack(fill="x")
+
+        self._footer_status = _label(sidebar_footer, "", size=10, color=MUTED)
+        self._footer_status.pack(pady=(0, 6))
+
+        # ── Content pages ─────────────────────────────────────────────────────
+        self._pages: dict[str, ctk.CTkFrame] = {}
+
+        btns_page = ctk.CTkFrame(self._content, fg_color="transparent")
+        self._btns_tab = ButtonsTab(btns_page, self.config, self)
         self._btns_tab.pack(fill="both", expand=True)
+        self._pages["Buttons"] = btns_page
 
-        self._dpi_tab = DPITab(
-            self._tabs.tab("DPI"), self.config, self.device)
+        dpi_page = ctk.CTkFrame(self._content, fg_color="transparent")
+        self._dpi_tab = DPITab(dpi_page, self.config, self.device)
         self._dpi_tab.pack(fill="both", expand=True)
+        self._pages["DPI"] = dpi_page
 
-        self._macros_tab = MacrosTab(
-            self._tabs.tab("Macros"), self.config,
-            on_macros_changed=self._on_macros_changed)
+        macros_page = ctk.CTkFrame(self._content, fg_color="transparent")
+        self._macros_tab = MacrosTab(macros_page, self.config,
+                                     on_macros_changed=self._on_macros_changed)
         self._macros_tab.pack(fill="both", expand=True)
+        self._pages["Macros"] = macros_page
 
-        self._light_tab = LightingTab(
-            self._tabs.tab("Lighting"), self.config, self.device)
+        lighting_page = ctk.CTkFrame(self._content, fg_color="transparent")
+        self._light_tab = LightingTab(lighting_page, self.config, self.device)
         self._light_tab.pack(fill="both", expand=True)
+        self._pages["Lighting"] = lighting_page
 
-        # Bottom bar with factory reset
-        footer = ctk.CTkFrame(self, fg_color=CARD, corner_radius=0, height=44)
-        footer.pack(fill="x", side="bottom")
-        footer.pack_propagate(False)
+        # Show default page
+        self._current_page: str | None = None
+        self._show_page("Buttons")
 
-        _btn(footer, "⚠  Factory Reset", self._factory_reset,
-             width=160, fg="#3b1e1e", hover="#5c2626").pack(
-            side="right", padx=12, pady=8)
+    # ── Page switching ────────────────────────────────────────────────────────
 
-        self._footer_status = _label(footer, "", size=12, color=MUTED)
-        self._footer_status.pack(side="right", padx=8, pady=8)
+    def _show_page(self, name: str):
+        if self._current_page == name:
+            return
+        # Hide current page
+        if self._current_page and self._current_page in self._pages:
+            self._pages[self._current_page].pack_forget()
+        # Show new page
+        self._pages[name].pack(fill="both", expand=True)
+        self._current_page = name
+        # Update nav button styles
+        for btn_name, btn in self._nav_buttons.items():
+            if btn_name == name:
+                btn.configure(fg_color=SURFACE, text_color=ACCENT,
+                              font=ctk.CTkFont(size=13, weight="bold"))
+            else:
+                btn.configure(fg_color="transparent", text_color=MUTED,
+                              font=ctk.CTkFont(size=13, weight="normal"))
 
     # ── Device connection ─────────────────────────────────────────────────────
 
     def _connect_device(self):
         ok = self.device.connected
         if ok:
-            self._conn_label.configure(text="⬤  Razer Viper Mini", text_color=SUCCESS)
+            self._conn_label.configure(text="Razer Viper Mini", text_color=SUCCESS)
         else:
-            self._conn_label.configure(text="⬤  Device not found", text_color=ERROR)
+            self._conn_label.configure(text="Device not found", text_color=ERROR)
             self.after(5000, self._connect_device)
 
     # ── Remapper ──────────────────────────────────────────────────────────────
@@ -880,7 +940,7 @@ class App(ctk.CTk):
 
     def _start_remapper(self):
         if not ButtonRemapper.accessibility_ok():
-            self._acc_bar.pack(fill="x", after=self._tabs)
+            self._acc_bar.pack(fill="x")
         else:
             self.remapper.start()
 
@@ -927,7 +987,7 @@ class App(ctk.CTk):
             self._footer_status.configure(text="Reset complete!", text_color=SUCCESS)
         else:
             self._footer_status.configure(
-                text="Sent reset (some commands may not confirm)", text_color=WARNING)
+                text="Sent reset (unconfirmed)", text_color=WARNING)
 
         self.after(4000, lambda: self._footer_status.configure(text=""))
 
