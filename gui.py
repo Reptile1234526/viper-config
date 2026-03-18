@@ -12,7 +12,7 @@ import customtkinter as ctk
 
 from config import Config
 from device import ViperMini
-from remapper import ButtonRemapper, BTN_MIDDLE, BTN_BACK, BTN_FORWARD, BUTTON_NAMES
+from remapper import ButtonRemapper, BTN_MIDDLE, BTN_BACK, BTN_FORWARD, BUTTON_NAMES, _action_queue
 
 # ── Theme ─────────────────────────────────────────────────────────────────────
 
@@ -84,6 +84,101 @@ class ColorButton(ctk.CTkButton):
 
     def get_color(self) -> list[int]:
         return self._color[:]
+
+
+# ── Shortcut recorder widget ──────────────────────────────────────────────────
+
+class ShortcutEntry(ctk.CTkFrame):
+    """Entry + Record button — press Record then hit a key combo to capture it."""
+
+    def __init__(self, parent, initial: str, on_change, **kw):
+        super().__init__(parent, fg_color="transparent", **kw)
+        self._on_change = on_change
+        self._recording = False
+        self._held_mods: set[str] = set()
+        self._bind_ids: list[tuple] = []
+
+        self._var = ctk.StringVar(value=initial)
+        self._entry = ctk.CTkEntry(self, textvariable=self._var,
+                                    placeholder_text="cmd+c",
+                                    width=130)
+        self._entry.pack(side="left", padx=(0, 4))
+        self._entry.bind("<FocusOut>", self._on_focus_out)
+
+        self._rec_btn = ctk.CTkButton(
+            self, text="Record", width=72,
+            fg_color=BTN_FG, hover_color=BTN_HOV,
+            corner_radius=8, font=ctk.CTkFont(size=12),
+            command=self._start)
+        self._rec_btn.pack(side="left")
+
+    def get(self) -> str:
+        return self._var.get().strip()
+
+    def set(self, value: str):
+        self._var.set(value)
+
+    def _on_focus_out(self, _event=None):
+        val = self._var.get().strip()
+        if val:
+            self._on_change(val)
+
+    def _start(self):
+        if self._recording:
+            return
+        self._recording = True
+        self._held_mods.clear()
+        self._rec_btn.configure(text="Listening…",
+                                 fg_color="#4a2a82", hover_color="#4a2a82")
+        root = self.winfo_toplevel()
+        bid1 = root.bind("<KeyPress>",   self._on_press,   add="+")
+        bid2 = root.bind("<KeyRelease>", self._on_release, add="+")
+        self._bind_ids = [(root, "<KeyPress>", bid1), (root, "<KeyRelease>", bid2)]
+        root.focus_force()
+
+    def _stop(self):
+        self._recording = False
+        for widget, event, bid in self._bind_ids:
+            try:
+                widget.unbind(event, bid)
+            except Exception:
+                pass
+        self._bind_ids.clear()
+        self._rec_btn.configure(text="Record",
+                                 fg_color=BTN_FG, hover_color=BTN_HOV)
+
+    def _on_release(self, event):
+        sym = event.keysym
+        if sym in ("Control_L", "Control_R"):   self._held_mods.discard("ctrl")
+        elif sym in ("Meta_L", "Meta_R"):        self._held_mods.discard("cmd")
+        elif sym in ("Shift_L", "Shift_R"):      self._held_mods.discard("shift")
+        elif sym in ("Alt_L", "Alt_R"):          self._held_mods.discard("alt")
+
+    def _on_press(self, event):
+        if not self._recording:
+            return
+        sym = event.keysym
+        if sym in ("Control_L", "Control_R"):   self._held_mods.add("ctrl");  return
+        if sym in ("Meta_L", "Meta_R"):          self._held_mods.add("cmd");   return
+        if sym in ("Shift_L", "Shift_R"):        self._held_mods.add("shift"); return
+        if sym in ("Alt_L", "Alt_R"):            self._held_mods.add("alt");   return
+        if sym == "Escape":                      self._stop();                  return
+
+        self._stop()
+
+        _SPECIAL = {
+            "Return": "enter", "Prior": "pageup", "Next": "pagedown",
+            "BackSpace": "backspace", "Delete": "delete", "Tab": "tab",
+            "Up": "up", "Down": "down", "Left": "left", "Right": "right",
+            "Home": "home", "End": "end", "space": "space",
+            **{f"F{n}": f"f{n}" for n in range(1, 13)},
+        }
+        key = _SPECIAL.get(sym, sym.lower())
+        parts = [m for m in ("cmd", "ctrl", "shift", "alt") if m in self._held_mods]
+        parts.append(key)
+        combo = "+".join(parts)
+        self._var.set(combo)
+        self._on_change(combo)
 
 
 # ── Buttons tab ───────────────────────────────────────────────────────────────
@@ -165,21 +260,17 @@ class ButtonsTab(ctk.CTkFrame):
             command=lambda v, n=btn_num, sv=var: self._on_select(n, sv))
         combo.pack(side="left", padx=4)
 
-        # Key-entry (shown only when "Keyboard shortcut" is selected)
-        key_var = ctk.StringVar(
-            value=action.get("key", "") if action.get("type") == "key" else "")
-        key_entry = ctk.CTkEntry(row, textvariable=key_var,
-                                  placeholder_text="e.g. cmd+c  or  ctrl+z",
-                                  width=160)
+        # Shortcut recorder (shown only when "Keyboard shortcut" is selected)
+        initial_key = action.get("key", "") if action.get("type") == "key" else ""
+        key_widget = ShortcutEntry(
+            row, initial=initial_key,
+            on_change=lambda val, n=btn_num: self._save_key(n, val))
         if action.get("type") == "key":
-            key_entry.pack(side="left", padx=4)
-
-        key_entry.bind("<FocusOut>",
-                       lambda e, n=btn_num, sv=key_var: self._save_key(n, sv))
+            key_widget.pack(side="left", padx=4)
 
         self._rows[btn_num] = {
             "combo": combo, "var": var,
-            "key_entry": key_entry, "key_var": key_var,
+            "key_entry": key_widget,
         }
 
     def _on_select(self, btn_num: int, var: ctk.StringVar):
@@ -201,8 +292,8 @@ class ButtonsTab(ctk.CTkFrame):
             self.config.save()
             self.app.remapper.config = self.config
 
-    def _save_key(self, btn_num: int, key_var: ctk.StringVar):
-        combo = key_var.get().strip()
+    def _save_key(self, btn_num: int, combo: str):
+        combo = combo.strip()
         if combo:
             self.config.set_button_action(btn_num, {"type": "key", "key": combo})
             self.config.save()
@@ -660,6 +751,7 @@ class App(ctk.CTk):
         self._build()
         self.after(300, self._connect_device)
         self.after(100, self._start_remapper)
+        self.after(20, self._drain_action_queue)
 
     # ── Build ──────────────────────────────────────────────────────────────────
 
@@ -728,15 +820,23 @@ class App(ctk.CTk):
     # ── Device connection ─────────────────────────────────────────────────────
 
     def _connect_device(self):
-        ok = self.device.connect()
+        ok = self.device.connected
         if ok:
-            name = self.device.product_name()
-            self._conn_label.configure(text=f"⬤  {name}", text_color=SUCCESS)
+            self._conn_label.configure(text="⬤  Razer Viper Mini", text_color=SUCCESS)
         else:
             self._conn_label.configure(text="⬤  Device not found", text_color=ERROR)
             self.after(5000, self._connect_device)
 
     # ── Remapper ──────────────────────────────────────────────────────────────
+
+    def _drain_action_queue(self):
+        try:
+            while True:
+                func = _action_queue.get_nowait()
+                func()
+        except Exception:
+            pass
+        self.after(20, self._drain_action_queue)
 
     def _start_remapper(self):
         if not ButtonRemapper.accessibility_ok():
@@ -800,3 +900,9 @@ class App(ctk.CTk):
         self.remapper.stop()
         self.device.disconnect()
         self.destroy()
+
+
+if __name__ == "__main__":
+    app = App()
+    app.protocol("WM_DELETE_WINDOW", app.on_close)
+    app.mainloop()

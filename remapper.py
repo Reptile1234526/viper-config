@@ -9,10 +9,17 @@ If Quartz/pyobjc is not available, falls back to pynput listen-only mode
 (macros fire but the original button press also fires).
 """
 
+import queue
 import threading
 import time
 import uuid
 from config import Config
+
+# Actions that need to run on the main (tkinter) thread are posted here.
+# The App polls this queue via `after` and executes them on the main thread,
+# which satisfies macOS 26's requirement that TSMGetInputSourceProperty
+# (used internally by pynput) is called from the main dispatch queue.
+_action_queue: queue.Queue = queue.Queue()
 
 # ── Quartz event tap ──────────────────────────────────────────────────────────
 
@@ -92,8 +99,67 @@ def _parse_combo(combo: str):
     return modifiers, main_key
 
 
+# macOS virtual key codes (kVK_* constants)
+_VK = {
+    'a':0,'s':1,'d':2,'f':3,'h':4,'g':5,'z':6,'x':7,'c':8,'v':9,
+    'b':11,'q':12,'w':13,'e':14,'r':15,'y':16,'t':17,
+    '1':18,'2':19,'3':20,'4':21,'6':22,'5':23,'=':24,'9':25,
+    '7':26,'-':27,'8':28,'0':29,']':30,'o':31,'u':32,'[':33,
+    'i':34,'p':35,'enter':36,'return':36,'l':37,'j':38,"'":39,
+    'k':40,';':41,'\\':42,',':43,'/':44,'n':45,'m':46,'.':47,
+    'tab':48,'space':49,'`':50,'backspace':51,'esc':53,'escape':53,
+    'cmd':55,'shift':56,'capslock':57,'alt':58,'option':58,'ctrl':59,
+    'control':59,
+    'f17':64,'f18':79,'f19':80,'f20':90,
+    'f5':96,'f6':97,'f7':98,'f3':99,'f8':100,'f9':101,
+    'f11':103,'f13':105,'f16':106,'f14':107,'f10':109,'f12':111,
+    'f15':113,'help':114,'home':115,'pageup':116,'delete':117,
+    'f4':118,'end':119,'f2':120,'pagedown':121,'f1':122,
+    'left':123,'right':124,'down':125,'up':126,
+}
+
+_MOD_FLAGS = {}
+if _QUARTZ:
+    _MOD_FLAGS = {
+        'cmd':     Quartz.kCGEventFlagMaskCommand,
+        'command': Quartz.kCGEventFlagMaskCommand,
+        'ctrl':    Quartz.kCGEventFlagMaskControl,
+        'control': Quartz.kCGEventFlagMaskControl,
+        'shift':   Quartz.kCGEventFlagMaskShift,
+        'alt':     Quartz.kCGEventFlagMaskAlternate,
+        'option':  Quartz.kCGEventFlagMaskAlternate,
+    }
+
+
 def press_combo(combo: str):
-    """Simulate a key combo like 'cmd+c'."""
+    """Simulate a key combo using Quartz HID-level events (works in games)."""
+    if _QUARTZ:
+        _press_combo_quartz(combo)
+    elif _PYNPUT:
+        _press_combo_pynput(combo)
+
+
+def _press_combo_quartz(combo: str):
+    parts = [p.strip().lower() for p in combo.split('+')]
+    flags = 0
+    keycode = None
+    for part in parts:
+        if part in _MOD_FLAGS:
+            flags |= _MOD_FLAGS[part]
+        elif part in _VK:
+            keycode = _VK[part]
+    if keycode is None:
+        return
+    src = Quartz.CGEventSourceCreate(Quartz.kCGEventSourceStateHIDSystemState)
+    down = Quartz.CGEventCreateKeyboardEvent(src, keycode, True)
+    Quartz.CGEventSetFlags(down, flags)
+    Quartz.CGEventPost(Quartz.kCGHIDEventTap, down)
+    up = Quartz.CGEventCreateKeyboardEvent(src, keycode, False)
+    Quartz.CGEventSetFlags(up, flags)
+    Quartz.CGEventPost(Quartz.kCGHIDEventTap, up)
+
+
+def _press_combo_pynput(combo: str):
     if not _PYNPUT:
         return
     kb = _KbCtrl()
@@ -277,18 +343,14 @@ class ButtonRemapper:
         if t == "disabled":
             pass
         elif t == "key":
-            threading.Thread(
-                target=press_combo, args=(action.get("key", ""),), daemon=True
-            ).start()
+            key = action.get("key", "")
+            _action_queue.put(lambda k=key: press_combo(k))
         elif t == "mouse":
-            threading.Thread(
-                target=click_mouse_btn, args=(action.get("button", "left"),), daemon=True
-            ).start()
+            btn = action.get("button", "left")
+            _action_queue.put(lambda b=btn: click_mouse_btn(b))
         elif t == "macro":
             macro_id = action.get("macro_id")
             macro = self.config.macros.get(macro_id)
             if macro:
-                steps = macro.get("steps", [])
-                threading.Thread(
-                    target=play_macro, args=(steps,), daemon=True
-                ).start()
+                steps = list(macro.get("steps", []))
+                _action_queue.put(lambda s=steps: play_macro(s))

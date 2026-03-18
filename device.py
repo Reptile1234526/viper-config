@@ -1,4 +1,8 @@
-"""Razer Viper Mini — HID device interface (DPI + lighting)."""
+"""Razer Viper Mini — HID device interface (DPI + lighting).
+
+The device is opened only for the duration of each command, then immediately
+closed. This prevents conflicts with background daemons that also need access.
+"""
 
 import os
 import signal
@@ -8,10 +12,6 @@ import time
 import hid
 from pathlib import Path
 
-_PID_FILE         = Path.home() / ".config" / "viper-config" / "breathe.pid"
-_REACTIVE_PID     = Path.home() / ".config" / "viper-config" / "reactive.pid"
-_DAEMON           = Path(__file__).parent / "breathe_daemon.py"
-_REACTIVE_DAEMON  = Path(__file__).parent / "reactive_daemon.py"
 from protocol import (
     RAZER_VID, VIPER_MINI_PID, USAGE_PAGE, make_report,
     CLS_DPI, CMD_DPI_SET,
@@ -20,76 +20,79 @@ from protocol import (
     EFX_NONE, EFX_STATIC, EFX_BREATHE, EFX_SPECTRUM, EFX_REACTIVE,
 )
 
+_PID_FILE        = Path.home() / ".config" / "viper-config" / "breathe.pid"
+_REACTIVE_PID    = Path.home() / ".config" / "viper-config" / "reactive.pid"
+_DAEMON          = Path(__file__).parent / "breathe_daemon.py"
+_REACTIVE_DAEMON = Path(__file__).parent / "reactive_daemon.py"
+
+
+def _daemon_running() -> bool:
+    """Return True if a breathing or reactive daemon is currently running."""
+    for pf in (_PID_FILE, _REACTIVE_PID):
+        try:
+            if pf.exists():
+                pid = int(pf.read_text().strip())
+                os.kill(pid, 0)   # signal 0 = just check existence
+                return True
+        except (ProcessLookupError, ValueError, OSError):
+            pass
+    return False
+
 
 class ViperMini:
-    """Thin wrapper around the Razer Viper Mini HID control interface."""
+    """Razer Viper Mini interface — opens the HID device per command only."""
 
     DPI_MIN = 100
     DPI_MAX = 30400
 
-    def __init__(self):
-        self._dev = None
+    # ── Device presence ───────────────────────────────────────────────────────
 
-    # ── Connection ────────────────────────────────────────────────────────────
+    @property
+    def connected(self) -> bool:
+        """True if the device is enumerable (does NOT open it)."""
+        return bool(hid.enumerate(RAZER_VID, VIPER_MINI_PID))
+
+    def product_name(self) -> str:
+        return "Razer Viper Mini" if self.connected else "Not connected"
+
+    # ── Legacy stubs (kept so GUI code still compiles) ────────────────────────
 
     def connect(self) -> bool:
-        """Open the Razer control HID interface, trying all available paths."""
+        return self.connected
+
+    def disconnect(self):
+        pass  # nothing to close — we don't hold the device open
+
+    # ── Internal: open → send → close ────────────────────────────────────────
+
+    def _send(self, report: bytearray) -> bytes | None:
+        """Open the device, send one feature report, read response, close."""
         interfaces = hid.enumerate(RAZER_VID, VIPER_MINI_PID)
         if not interfaces:
-            return False
+            return None
 
-        # Prefer vendor-specific usage page, then fall back to any interface
         preferred = [i for i in interfaces if i.get("usage_page") == USAGE_PAGE]
         ordered = preferred + [i for i in interfaces if i not in preferred]
 
         for info in ordered:
+            d = hid.device()
             try:
-                d = hid.device()
                 d.open_path(info["path"])
                 d.set_nonblocking(0)
-                self._dev = d
-                return True
+                d.send_feature_report(bytes(report))
+                time.sleep(0.015)
+                resp = bytes(d.get_feature_report(0x00, 91))
+                return resp
             except Exception:
                 continue
-        return False
-
-    def disconnect(self):
-        if self._dev:
-            try:
-                self._dev.close()
-            except Exception:
-                pass
-            self._dev = None
-
-    @property
-    def connected(self) -> bool:
-        return self._dev is not None
-
-    def product_name(self) -> str:
-        if not self._dev:
-            return "Not connected"
-        try:
-            return self._dev.get_product_string() or "Razer Viper Mini"
-        except Exception:
-            return "Razer Viper Mini"
-
-    # ── Internal ──────────────────────────────────────────────────────────────
-
-    def _send(self, report: bytearray) -> bytes | None:
-        if not self._dev:
-            return None
-        try:
-            self._dev.send_feature_report(bytes(report))
-            time.sleep(0.015)
-            resp = self._dev.get_feature_report(0x00, 91)
-            return bytes(resp)
-        except Exception as e:
-            print(f"[device] HID error: {e}")
-            return None
+            finally:
+                try:
+                    d.close()
+                except Exception:
+                    pass
+        return None
 
     def _ok(self, resp: bytes | None) -> bool:
-        # Status byte at index 1: 0x02=success, 0x00=new/pending, 0x01=busy
-        # Only treat 0x03 (fail) and 0x05 (unsupported) as errors.
         if resp is None:
             return False
         if len(resp) < 2:
@@ -99,10 +102,6 @@ class ViperMini:
     # ── DPI ───────────────────────────────────────────────────────────────────
 
     def set_dpi_stage(self, stage: int, dpi_x: int, dpi_y: int) -> bool:
-        """
-        Write one DPI stage (1-indexed, 1–5).
-        DPI values are clamped to [100, 30400] and snapped to multiples of 100.
-        """
         dpi_x = max(self.DPI_MIN, min(self.DPI_MAX, round(dpi_x / 100) * 100))
         dpi_y = max(self.DPI_MIN, min(self.DPI_MAX, round(dpi_y / 100) * 100))
         args = bytes([
@@ -114,48 +113,36 @@ class ViperMini:
         return self._ok(self._send(make_report(CLS_DPI, CMD_DPI_SET, args)))
 
     def apply_dpi_stages(self, stages: list[int], active_idx: int = 0) -> bool:
-        """Write up to 5 DPI stages and choose which is active."""
         ok = True
         for i, dpi in enumerate(stages[:5], start=1):
             ok &= self.set_dpi_stage(i, dpi, dpi)
-        # CMD 0x06: set active stage count / current stage
-        resp = self._send(make_report(CLS_DPI, 0x06, bytes([active_idx + 1])))
+        self._send(make_report(CLS_DPI, 0x06, bytes([active_idx + 1])))
         return ok
 
     # ── Lighting ──────────────────────────────────────────────────────────────
-    #
-    # Razer uses two lighting protocols depending on firmware generation:
-    #   Standard  (class 0x03, cmd 0x01): LED IDs 0x01/0x04, args [storage, led, efx, 0,0, ...]
-    #   Extended  (class 0x0F, cmd 0x02): zone-based,         args [storage, zone, efx, 0,0, ...]
-    # We try both in sequence; first one that doesn't return 0x03/0x05 wins.
 
     def _light(self, led_id: int, effect: int, extra_args: bytes = b"") -> bool:
-        # Variant A: standard (class 0x03) with given led_id
+        # Variant A: standard (class 0x03, cmd 0x01)
         args_a = bytes([0x01, led_id, effect, 0x00, 0x00]) + extra_args
-        resp = self._send(make_report(CLS_LIGHT, CMD_LIGHT_SET, args_a))
-        if self._ok(resp):
+        if self._ok(self._send(make_report(CLS_LIGHT, CMD_LIGHT_SET, args_a))):
             return True
         time.sleep(0.02)
 
-        # Variant B: standard with alternate LED ID (scroll=0x01 vs logo=0x04)
-        alt_led = LED_SCROLL if led_id == LED_LOGO else LED_LOGO
-        args_b = bytes([0x01, alt_led, effect, 0x00, 0x00]) + extra_args
-        resp = self._send(make_report(CLS_LIGHT, CMD_LIGHT_SET, args_b))
-        if self._ok(resp):
+        # Variant B: alternate LED ID
+        alt = LED_SCROLL if led_id == LED_LOGO else LED_LOGO
+        args_b = bytes([0x01, alt, effect, 0x00, 0x00]) + extra_args
+        if self._ok(self._send(make_report(CLS_LIGHT, CMD_LIGHT_SET, args_b))):
             return True
         time.sleep(0.02)
 
-        # Variant C: extended matrix (class 0x0F, cmd 0x02), zone 0x00
-        # RGB bytes are at offset 6 in args (one extra padding byte vs standard)
+        # Variant C: extended matrix (class 0x0F, cmd 0x02), extra padding byte
         args_c = bytes([0x01, 0x00, effect, 0x00, 0x00, 0x00]) + extra_args
-        resp = self._send(make_report(0x0F, 0x02, args_c))
-        if self._ok(resp):
+        if self._ok(self._send(make_report(0x0F, 0x02, args_c))):
             return True
 
         # Variant D: extended matrix, zone 0x01
         args_d = bytes([0x01, 0x01, effect, 0x00, 0x00, 0x00]) + extra_args
-        resp = self._send(make_report(0x0F, 0x02, args_d))
-        return self._ok(resp)
+        return self._ok(self._send(make_report(0x0F, 0x02, args_d)))
 
     def set_off(self, led_id: int = LED_LOGO) -> bool:
         return self._light(led_id, EFX_NONE)
@@ -166,18 +153,15 @@ class ViperMini:
     def set_spectrum(self, led_id: int = LED_LOGO) -> bool:
         return self._light(led_id, EFX_SPECTRUM)
 
-    def set_breathing(self, r: int, g: int, b: int,
-                      r2: int = 0, g2: int = 0, b2: int = 0,
-                      dual: bool = False,
-                      led_id: int = LED_LOGO) -> bool:
+    def set_breathing(self, r, g, b, r2=0, g2=0, b2=0,
+                      dual=False, led_id=LED_LOGO) -> bool:
         extra = bytes([0x02, r, g, b, r2, g2, b2]) if dual else bytes([0x01, r, g, b])
         return self._light(led_id, EFX_BREATHE, extra)
 
-    def set_reactive(self, r: int, g: int, b: int,
-                     speed: int = 2,
-                     led_id: int = LED_LOGO) -> bool:
-        speed = max(1, min(3, speed))
-        return self._light(led_id, EFX_REACTIVE, bytes([speed, r, g, b]))
+    def set_reactive(self, r, g, b, speed=2, led_id=LED_LOGO) -> bool:
+        return self._light(led_id, EFX_REACTIVE, bytes([max(1, min(3, speed)), r, g, b]))
+
+    # ── Daemons ───────────────────────────────────────────────────────────────
 
     def _kill_pid_file(self, pid_file: Path):
         try:
@@ -191,6 +175,10 @@ class ViperMini:
     def stop_all_daemons(self):
         self._kill_pid_file(_PID_FILE)
         self._kill_pid_file(_REACTIVE_PID)
+        time.sleep(0.15)   # wait for daemons to release the device
+
+    def stop_software_breathing(self):
+        self.stop_all_daemons()
 
     def start_software_breathing(self, speed: int = 2):
         self.stop_all_daemons()
@@ -211,55 +199,33 @@ class ViperMini:
             stderr=subprocess.DEVNULL,
         )
 
-    def stop_software_breathing(self):
-        self.stop_all_daemons()
-
-    # ── Factory reset ─────────────────────────────────────────────────────────
-
-    def factory_reset(self) -> bool:
-        """
-        Reset the mouse to factory defaults:
-          1. Send the hardware reset command (class 0x06, cmd 0x09)
-          2. Restore DPI to 800 DPI, single stage
-          3. Restore lighting to static green (Razer factory default)
-        Returns True if all steps succeeded.
-        """
-        ok = True
-
-        # DPI → 800 (single stage, Razer factory default)
-        ok &= self.set_dpi_stage(1, 800, 800)
-        time.sleep(0.05)
-
-        # Lighting → static white (safe neutral default)
-        ok &= self.set_static(255, 255, 255)
-
-        return ok
+    # ── Lighting apply ────────────────────────────────────────────────────────
 
     def apply_lighting(self, cfg: dict) -> bool:
-        """Apply a lighting config dict (from Config.data['lighting'])."""
         effect = cfg.get("effect", "static")
-        r, g, b = cfg.get("color", [130, 140, 248])
+        r, g, b   = cfg.get("color",  [130, 140, 248])
         r2, g2, b2 = cfg.get("color2", [56, 189, 248])
-        speed = cfg.get("speed", 2)
+        speed     = cfg.get("speed", 2)
 
-        # Always kill daemons first
-        self.stop_all_daemons()
+        self.stop_all_daemons()   # kills daemons and waits 150ms for device release
 
-        if effect in ("breathing", "reactive"):
-            # Give the daemon exclusive HID access — app disconnects first
-            self.disconnect()
-            if effect == "breathing":
-                self.start_software_breathing(speed=speed)
-            else:
-                self.start_reactive(r, g, b, speed=speed)
+        if effect == "breathing":
+            self.start_software_breathing(speed=speed)
             return True
-
-        # For hardware commands, reconnect if we previously disconnected
-        if not self.connected:
-            self.connect()
-
-        if effect == "off":
+        elif effect == "reactive":
+            self.start_reactive(r, g, b, speed=speed)
+            return True
+        elif effect == "off":
             return self.set_off()
         elif effect == "static":
             return self.set_static(r, g, b)
         return False
+
+    # ── Factory reset ─────────────────────────────────────────────────────────
+
+    def factory_reset(self) -> bool:
+        self.stop_all_daemons()
+        ok = self.set_dpi_stage(1, 800, 800)
+        time.sleep(0.05)
+        ok &= self.set_static(255, 255, 255)
+        return ok
