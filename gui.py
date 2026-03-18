@@ -19,32 +19,7 @@ from remapper import ButtonRemapper, BTN_MIDDLE, BTN_BACK, BTN_FORWARD, BUTTON_N
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
 
-# ── Fix CTkButton reliability on macOS ────────────────────────────────────────
-# CTkButton binds its command to <Button-1> (press) on the canvas AND its child
-# text/image labels.  On macOS the press event is sometimes consumed by the OS
-# for window-raising.  Fix: also fire on <ButtonRelease-1> on every child widget,
-# with a 150 ms dedup guard to prevent double-firing on normal clicks.
 import time as _time
-
-_ctk_orig_clicked = ctk.CTkButton._clicked
-def _ctk_patched_clicked(self, event=None):
-    self._viper_press_t = _time.monotonic()
-    _ctk_orig_clicked(self, event)
-ctk.CTkButton._clicked = _ctk_patched_clicked
-
-_ctk_orig_bindings = ctk.CTkButton._create_bindings
-def _ctk_patched_bindings(self, sequence=None):
-    _ctk_orig_bindings(self, sequence)
-    if sequence is None or sequence == "<ButtonRelease-1>":
-        def _fallback(e, s=self):
-            if _time.monotonic() - getattr(s, '_viper_press_t', 0) > 0.15:
-                _ctk_orig_clicked(s)
-        for w in [self._canvas,
-                  getattr(self, '_text_label', None),
-                  getattr(self, '_image_label', None)]:
-            if w is not None:
-                w.bind("<ButtonRelease-1>", _fallback, add="+")
-ctk.CTkButton._create_bindings = _ctk_patched_bindings
 
 BG       = "#030311"
 CARD     = "#101028"
@@ -69,9 +44,19 @@ def _label(parent, text, size=13, bold=False, color=TEXT, **kw):
 
 
 def _btn(parent, text, command, width=120, fg=BTN_FG, hover=BTN_HOV, **kw):
-    return ctk.CTkButton(parent, text=text, command=command, width=width,
-                         fg_color=fg, hover_color=hover,
-                         corner_radius=8, font=ctk.CTkFont(size=13), **kw)
+    _last = [0.0]
+    def _fire(e=None):
+        t = _time.monotonic()
+        if t - _last[0] > 0.1:
+            _last[0] = t
+            command()
+    b = ctk.CTkButton(parent, text=text, command=_fire, width=width,
+                      fg_color=fg, hover_color=hover,
+                      corner_radius=8, font=ctk.CTkFont(size=13), **kw)
+    b._viper_fire = _fire
+    b.bind("<ButtonRelease-1>", _fire, add="+")
+    b.bind("<B1-Motion>", _fire, add="+")
+    return b
 
 
 def _section(parent, title):
@@ -779,6 +764,8 @@ class App(ctk.CTk):
         self.after(300, self._connect_device)
         self.after(100, self._start_remapper)
         self.after(20, self._drain_action_queue)
+        self._btn_was_pressed = False
+        self.after(10, self._poll_button_clicks)
 
     # ── Build ──────────────────────────────────────────────────────────────────
 
@@ -855,6 +842,32 @@ class App(ctk.CTk):
             self.after(5000, self._connect_device)
 
     # ── Remapper ──────────────────────────────────────────────────────────────
+
+    def _poll_button_clicks(self):
+        """Quartz-based click detection — works even when macOS swallows tkinter events."""
+        try:
+            import Quartz as _Q
+            pressed = _Q.CGEventSourceButtonState(
+                _Q.kCGEventSourceStateCombinedSessionState,
+                _Q.kCGMouseButtonLeft)
+            if pressed and not self._btn_was_pressed:
+                x, y = self.winfo_pointerxy()
+                w = self.winfo_containing(x, y)
+                for _ in range(12):
+                    if w is None:
+                        break
+                    vf = getattr(w, '_viper_fire', None)
+                    if vf is not None:
+                        vf()
+                        break
+                    try:
+                        w = w.master
+                    except Exception:
+                        break
+            self._btn_was_pressed = bool(pressed)
+        except Exception:
+            pass
+        self.after(10, self._poll_button_clicks)
 
     def _drain_action_queue(self):
         try:
