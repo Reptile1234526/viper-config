@@ -19,6 +19,33 @@ from remapper import ButtonRemapper, BTN_MIDDLE, BTN_BACK, BTN_FORWARD, BUTTON_N
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
 
+# ── Fix CTkButton reliability on macOS ────────────────────────────────────────
+# CTkButton binds its command to <Button-1> (press) on the canvas AND its child
+# text/image labels.  On macOS the press event is sometimes consumed by the OS
+# for window-raising.  Fix: also fire on <ButtonRelease-1> on every child widget,
+# with a 150 ms dedup guard to prevent double-firing on normal clicks.
+import time as _time
+
+_ctk_orig_clicked = ctk.CTkButton._clicked
+def _ctk_patched_clicked(self, event=None):
+    self._viper_press_t = _time.monotonic()
+    _ctk_orig_clicked(self, event)
+ctk.CTkButton._clicked = _ctk_patched_clicked
+
+_ctk_orig_bindings = ctk.CTkButton._create_bindings
+def _ctk_patched_bindings(self, sequence=None):
+    _ctk_orig_bindings(self, sequence)
+    if sequence is None or sequence == "<ButtonRelease-1>":
+        def _fallback(e, s=self):
+            if _time.monotonic() - getattr(s, '_viper_press_t', 0) > 0.15:
+                _ctk_orig_clicked(s)
+        for w in [self._canvas,
+                  getattr(self, '_text_label', None),
+                  getattr(self, '_image_label', None)]:
+            if w is not None:
+                w.bind("<ButtonRelease-1>", _fallback, add="+")
+ctk.CTkButton._create_bindings = _ctk_patched_bindings
+
 BG       = "#030311"
 CARD     = "#101028"
 ACCENT   = "#818cf8"
